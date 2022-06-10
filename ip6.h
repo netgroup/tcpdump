@@ -132,6 +132,7 @@ struct ip6_dest {
 #define IP6OPT_RPL		0x63	/* 01 1 00011 */
 #define IP6OPT_TUN_ENC_LIMIT	0x04	/* 00 0 00100 */
 #define IP6OPT_ROUTER_ALERT	0x05	/* 00 0 00101 */
+#define IP6OPT_PT       0x32    /* 00 1 10010 */
 
 #define IP6OPT_RTALERT_LEN	4
 #define IP6OPT_RTALERT_MLD	0	/* Datagram contains an MLD message */
@@ -196,6 +197,11 @@ struct ip6_srh {
 	nd_uint16_t	srh_tag;		/* Tag */
 	nd_ipv6		srh_segments[1];	/* SRH segments list*/
 };
+
+#define IPV6_SRH_TLV_PAD1 0
+#define IPV6_SRH_TLV_PADN 4
+#define IPV6_SRH_TLV_HMAC 5
+#define IPV6_SRH_TLV_PT 128
 
 /* Fragment header */
 struct ip6_frag {

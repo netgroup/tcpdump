@@ -33,13 +33,154 @@
 
 #include "ip6.h"
 
+static int
+srh_tlv_print(netdissect_options *ndo, const u_char *p, u_int bytes_left)
+{
+	u_int tlv_type, tlv_len;
+	uint8_t parse_next = 1;
+	while (parse_next)
+	{
+		tlv_type = GET_U_1(p);
+		p += 1;
+		bytes_left -= 1;
+		if (bytes_left == 0)
+			break;
+		if (tlv_type == IPV6_SRH_TLV_PAD1)
+		{
+			ND_PRINT(", TLV-type=Pad1(%u)", tlv_type);
+			continue;
+		}
+		
+		tlv_len = GET_U_1(p);
+		p += 1;
+		bytes_left -= 1;
+		if (tlv_len > bytes_left)
+		{
+			ND_PRINT(" (invalid TLV length %u, bytes left %u)", tlv_len, bytes_left);
+			return -1;
+		}
+
+		switch (tlv_type)
+		{
+		case IPV6_SRH_TLV_PADN:
+			ND_PRINT(", TLV-type=PadN(%u)", tlv_type);
+			ND_PRINT(", TLV-len=%u", tlv_len);
+			p += tlv_len;
+			bytes_left -= tlv_len;
+			if (bytes_left == 0)
+			{
+				parse_next = 0;
+				break;
+			}
+			break;
+		case IPV6_SRH_TLV_HMAC:
+			ND_PRINT(", TLV-type=HMAC(%u)", tlv_type);
+			ND_PRINT(", TLV-len=%u", tlv_len);
+			if (tlv_len + 6 > bytes_left)
+			{
+				ND_PRINT(" (invalid TLV length %u, bytes left %u)", tlv_len, bytes_left);
+				return -1;
+			}
+			uint16_t reserved;
+			uint32_t key_id;
+			uint8_t hmac_byte;
+			reserved = GET_BE_U_2(p);
+			p += 2;
+			if (ndo->ndo_vflag)
+				ND_PRINT(", D=%u", reserved >> 15);
+			key_id = GET_BE_U_4(p);
+			p += 4;
+			if (ndo->ndo_vflag)
+				ND_PRINT(", HMAC-key-ID=0x%02x", key_id);
+			bytes_left -= 6;
+			if (ndo->ndo_vflag)
+				ND_PRINT(", HMAC=0x");
+			for (u_int i = 0; i < tlv_len; i++)
+			{
+				hmac_byte = GET_U_1(p);
+				p += 1;
+				bytes_left -= 1;
+				if (ndo->ndo_vflag)
+					ND_PRINT("%02x", hmac_byte);
+			}
+			if (bytes_left == 0)
+			{
+				parse_next = 0;
+				break;
+			}
+			break;
+		case IPV6_SRH_TLV_PT:
+			ND_PRINT(", TLV-type=PT(%u)", tlv_type);
+			ND_PRINT(", TLV-len=%u", tlv_len);
+			if (tlv_len != 14)
+			{
+				ND_PRINT(" (invalid TLV length %u, must be 14)", tlv_len);
+				return -1;
+			}
+			uint16_t if_id_il, sess_id, seq_num;
+			u_int64_t t64;
+			if_id_il = GET_BE_U_2(p);
+			p += 2;
+			if (ndo->ndo_vflag) {
+				ND_PRINT(", IF-ID=%u", if_id_il >> 4);
+				ND_PRINT(", IF-LD=%u", if_id_il & 15);
+			}
+			t64 = GET_BE_U_8(p);
+			p += 8;
+			if (ndo->ndo_vflag)
+				ND_PRINT(", t64=%lu", t64);
+			sess_id = GET_BE_U_2(p);
+			p += 2;
+			if (ndo->ndo_vflag)
+				ND_PRINT(", session-ID=%u", sess_id);
+			seq_num = GET_BE_U_2(p);
+			p += 2;
+			bytes_left -= 14;
+			if (ndo->ndo_vflag)
+				ND_PRINT(", sequence-number=%u", seq_num);
+			if (bytes_left == 0)
+			{
+				parse_next = 0;
+				break;
+			}
+			break;
+		default:						/* Unknown type */
+			ND_PRINT(", TLV-type=Unknown(%u)", tlv_type);
+			ND_PRINT(", TLV-len=%u", tlv_len);
+			if (ndo->ndo_vflag)
+				ND_PRINT(", TLV-value=0x");
+			uint8_t tlv_byte;
+			for (u_int i = 0; i < tlv_len; i++)
+			{
+				tlv_byte = GET_U_1(p);
+				p += 1;
+				bytes_left -= 1;
+				if (ndo->ndo_vflag)
+					ND_PRINT("%02x", tlv_byte);
+			}
+			if (bytes_left == 0)
+			{
+				parse_next = 0;
+				break;
+			}
+			break;
+		}
+		if (bytes_left == 0)
+			break;
+	}
+	return 0;
+}
+
+
 int
 rt6_print(netdissect_options *ndo, const u_char *bp, const u_char *bp2 _U_)
 {
 	const struct ip6_rthdr *dp;
 	const struct ip6_rthdr0 *dp0;
 	const struct ip6_srh *srh;
-	u_int i, len, type;
+	u_int len, type;
+	uint8_t i, last_entry, seg_list_len;
+	int err;
 	const u_char *p;
 
 	ndo->ndo_protocol = "rt6";
@@ -81,7 +222,9 @@ rt6_print(netdissect_options *ndo, const u_char *bp, const u_char *bp2 _U_)
 		break;
 	case IPV6_RTHDR_TYPE_4:
 		srh = (const struct ip6_srh *)dp;
-		ND_PRINT(", last-entry=%u", GET_U_1(srh->srh_last_ent));
+		last_entry = GET_U_1(srh->srh_last_ent);
+		ND_PRINT(", last-entry=%u", last_entry);
+		last_entry++;
 
 		if (GET_U_1(srh->srh_flags) || ndo->ndo_vflag) {
 			ND_PRINT(", flags=0x%0x",
@@ -89,17 +232,23 @@ rt6_print(netdissect_options *ndo, const u_char *bp, const u_char *bp2 _U_)
 		}
 
 		ND_PRINT(", tag=%x", GET_BE_U_2(srh->srh_tag));
-
-		if (len % 2 == 1) {
-			ND_PRINT(" (invalid length %u)", len);
-			goto invalid;
-		}
-		len >>= 1;
 		p  = (const u_char *) srh->srh_segments;
-		for (i = 0; i < len; i++) {
+		for (i = 0; i < last_entry; i++)
+		{
 			ND_PRINT(", [%u]%s", i, GET_IP6ADDR_STRING(p));
 			p += 16;
 		}
+		seg_list_len = (last_entry) * 2;
+		if (seg_list_len < len)
+		{
+			/* there is TLV */
+			u_int bytes_left;
+			bytes_left = (len - seg_list_len) * 8;
+			err = srh_tlv_print(ndo, p, bytes_left);
+			if (err)
+				goto invalid;
+		}
+		
 		/*(*/
 		ND_PRINT(") ");
 		return((GET_U_1(srh->srh_len) + 1) << 3);
