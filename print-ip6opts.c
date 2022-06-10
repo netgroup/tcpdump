@@ -94,6 +94,7 @@ ip6_opt_process(netdissect_options *ndo, const u_char *bp, int len,
     int optlen = 0;
     int found_jumbo = 0;
     uint32_t jumbolen = 0;
+	uint j;
 
     if (len == 0)
         return 0;
@@ -177,7 +178,7 @@ ip6_opt_process(netdissect_options *ndo, const u_char *bp, int len,
 		}
 	    }
 	    break;
-        case IP6OPT_HOME_ADDRESS:
+	case IP6OPT_HOME_ADDRESS:
 	    if (len - i < IP6OPT_HOMEADDR_MINLEN) {
 		ND_PRINT("(homeaddr: trunc)");
 		goto trunc;
@@ -196,6 +197,25 @@ ip6_opt_process(netdissect_options *ndo, const u_char *bp, int len,
 		ND_PRINT(")");
 	    }
 	    break;
+	case IP6OPT_PT:
+		ND_PRINT("(type=PT(0x%02x), len=%u", IP6OPT_PT,
+			 GET_U_1(bp + i + 1));
+		if (ndo->ndo_vflag) {
+			ND_PRINT(", MCD-stack (");
+			ND_PRINT("[0](ID=%u, LD=%u, TTS=%u)", GET_BE_U_2(bp + i + 2) >> 4,
+				GET_BE_U_2(bp + i + 2) & 15, GET_U_1(bp + i + 4));
+			for (j = 1; j < GET_U_1(bp + i + 1) / 3; j++)
+			{
+				ND_PRINT(", [%u](ID=%u, LD=%u, TTS=%u)", j, GET_BE_U_2(bp + i + 3*j + 2) >> 4,
+				GET_BE_U_2(bp + i + 3*j + 2) & 15, GET_U_1(bp + i + 3*j + 4));
+			}
+			
+			ND_PRINT("))");
+		}
+		else{
+			ND_PRINT(") ");
+		}
+		break;
 	default:
 	    if (len - i < IP6OPT_MINLEN) {
 		ND_PRINT("(type %u: trunc)", GET_U_1(bp + i));
